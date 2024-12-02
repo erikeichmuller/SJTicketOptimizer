@@ -1,0 +1,19 @@
+{
+  "name": "sjticketoptimizer",
+  "version": "1.0.0",
+  "description": "This project aims to help SJ and customers to SJ by optimizing available tickets and sets",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/scraper.js",
+    "scrape-route": "node src/scrape_route.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.7.8",
+    "cheerio": "^1.0.0",
+    "puppeteer": "^23.9.0"
+  }
+}
