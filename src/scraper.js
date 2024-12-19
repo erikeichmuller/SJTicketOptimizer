@@ -1,165 +1,171 @@
 import {setTimeout} from "node:timers/promises";
 import puppeteer from "puppeteer";
-import scrapeRoute from "./scrape_route.js";
-import { selectStation, selectDate, handleLanguagePopup, handleCookieConsentPopup } from './utils.js';
+import select from "puppeteer-select";
+import scrapeStops from "./scrape_stops.js";
+import { selectStation, selectDate, handleUnexpectedPopups } from './utils.js';
 
-const scrapeSJ = async (departure, destination, departureDate, passengerType, passengerAge, departureTime, arrivalTime, runAgain) => {
-    const url = 'https://www.sj.se/sok-resa';
+const departure = 'Stockholm Central';
+const destination = 'Hässleholm Central';
+const departureDate = '2024-12-20';
+const departureTime = '11:24';
+const url = 'https://www.sj.se/en/search-journey';
 
+let currDestination = destination;
+let currDeparture = departure;
+let currDepartureTime = departureTime;
+
+let soldOut = false;
+let changedDestination = false;
+let changedDeparture = true;
+let firstTimeDate = true;
+
+let routeData = [];
+let trips = [];
+
+const scrapeSJ = async () => {
+    
     const browser = await puppeteer.launch({ 
         headless: false,
         //slowMo: 100 // Add a delay of 100ms between each action 
     });
+
+    console.log('Start scraping SJ');
+
+    // Fetch the stops for the trip
+    routeData = await scrapeStops(browser, departure, destination, departureDate, departureTime);
+
+    // New page for searching
     const page = await browser.newPage();
-
-    console.log('Navigating to URL...');
     await page.goto(url, { waitUntil: 'networkidle2' });
-    console.log('Page loaded.');
+    await setTimeout(1000);
 
-    await handleLanguagePopup(page);
-    await handleCookieConsentPopup(page);
-    await selectStation(page, '#fromLocation', departure);
-    await selectStation(page, '#toLocation', destination);
-    await selectDate(page, '#departureDate', departureDate);
-    await selectTraveller(page);
-    await selectPassengerType(page, passengerType);
-    await setTimeout(1000);
-    await inputAge(page, passengerAge);
-    await clickSaveButton(page);
-    await setTimeout(1000);
-    await clickSearchButton(page);
-    await setTimeout(1000);
-    await waitForResults(page);
-    await scrollToLoadAllResults(page);
-    const newScrape = await scrapeScript(page, departureTime, arrivalTime);
-    if (newScrape) {
-        console.log('New scrape required. A trip with the specified times is sold out.');
-        const newUrl = 'https://www.sj.se/en/traffic-information';
-        const routeData = await scrapeRoute(newUrl, departureTime, browser, departure, destination, departureDate);
-        console.log('Scraped route data:', routeData);
+    handleUnexpectedPopups(page);
+
+    // Make an initial search
+    await makeNewSearch(page);
+
+    // Are there stops for the initial trip?
+    if (routeData.length === 0) {
+        if (soldOut) {
+            console.log('The trip has no substations and is fully booked');
+        } else {
+            console.log('The inputted trip does have available seats');
+        }
+        await browser.close();
+        return;
     } else {
-        console.log('No new scrape required.');
+        if (!soldOut) {
+            console.log('The inputted trip does have available seats');
+            await browser.close();
+            return;
+        } else {
+            await newProcessData(page, routeData);
+        }
     }
 
-    await setTimeout(5000);
+    if (trips.length === 0) {
+        console.log('No trips available.');
+    } else {
+        console.log('Trips available:', trips);
+    }
 
     await browser.close();
-
-    return runAgain //? scrapeSJ(departure, destination, departureDate, passengerType, passengerAge, departureTime, arrivalTime, runAgain) : null;
 };
 
-/*const handleLanguagePopup = async (page) => {
-    try {
-        await page.waitForSelector('.MuiDialog-root', { visible: true, timeout: 10000 });
-        // Click the button to select English
-        await page.evaluate(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const englishButton = buttons.find(button => button.textContent.includes('English'));
-            if (englishButton) {
-                englishButton.click();
-            }
-        });
-        console.log('Clicked English language button');
-    } catch (error) {
-        console.log('Language selection popup not found or error:', error);
-    }
-};*/
-
-/*const handleCookieConsentPopup = async (page) => {
-    try {
-        console.log('Checking for cookie consent popup...');
-        await page.waitForSelector('.MuiDialog-root', { visible: true, timeout: 10000 });
-        console.log('Cookie consent popup found');
-        await page.evaluate(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const acceptButton = buttons.find(button => button.textContent.includes('Accept all cookies'));
-            if (acceptButton) {
-                acceptButton.click();
-            }
-        });
-        console.log('Clicked accept all cookies button');
-    } catch (error) {
-        console.log('Cookie consent popup not found or error:', error);
-    }
-};*/
-
-/*const selectStation = async (page, selector, station) => {
-    try {
-    await page.click(selector);
-    await page.type(selector, station);
-    await page.waitForSelector('.MuiButtonBase-root.MuiMenuItem-root', { visible: true , timeout: 10000 });
-    await page.click('.MuiButtonBase-root.MuiMenuItem-root');
-
-    // Get the actual value of the selected station
-    const actualStation = await page.evaluate((selector) => {
-        return document.querySelector(selector).value;
-      }, selector);
-    return actualStation; 
-    } catch (error) {
-        console.log('Error selecting station:', error);
-        return null;
-    } 
-};*/
-
-/*const selectDate = async (page, selector, departureDate) => {
-    try {
-        await page.click(selector);
-        await page.evaluate((selector) => {
-            document.querySelector(selector).value = '';
-        }, selector);
-        await page.type(selector, departureDate); // Adjust the date format as needed
-    } catch (error) {
-        console.log('Error selecting departure date:', error);
-    }
-};*/
-
-const selectTraveller = async (page) => {
+const newProcessData = async (page, route) => {
     try{
-        await page.click('button.MuiButtonBase-root.MuiCardActionArea-root.css-l15tdn');
+        if (route.length === 0) {
+            return;
+        } else {
+            for (let i = 0; i < route.length; i++) {
+                // If the currDestination was changed because a trip was found, then we should not change it again
+                if (!changedDestination) {
+                    currDestination = route[route.length - (i + 1)].name;
+                } else {
+                    i = i - 1;
+                }
+                if (currDeparture === currDestination) {
+                    return;
+                }
+                await makeNewSearch(page);
+                if (soldOut) {
+                    changedDestination = false;
+                    changedDeparture = false;
+                    continue;
+                } else {
+                    // Trip found
+                    console.log('There is a trip available from ' + currDeparture + ' to ' + currDestination + ' with departure time ' + currDepartureTime);
+                    trips.push([currDeparture, currDestination, currDepartureTime]);
+
+                    if (currDestination !== destination) {
+                        currDeparture = currDestination;
+                        currDestination = destination;
+                        changedDestination = true;
+                        changedDeparture = true;
+                        console.log('currDestination:', currDestination);
+                        currDepartureTime = route[route.length - (i + 1)].departure;
+
+                        // Find the index of the current destination in the route array
+                        const currentIndex = route.findIndex(station => station.name === currDeparture);
+
+                        // Slice the route array from the current index + 1
+                        const remainingRoute = route.slice(currentIndex + 1);
+                        console.log('Remaining route:', remainingRoute);
+                        await newProcessData(page, remainingRoute);
+                    }
+                    break;
+                }
+            }
+        }
     } catch (error) {
-            console.log('Error selecting passenger type:', error);
+        console.log('Error in process Data:', error);
     }
 };
 
-const selectPassengerType = async (page, type) => {
-    try {
-        await page.click('#select_passenger_type-select');
-        await page.waitForSelector('li[data-value="'+ type +'"]', { visible: true, timeout: 10000 }); 
-        await page.click('li[data-value="' + type +'"]');
+// Make a new search with the new departure and destination
+const makeNewSearch = async (page) => {
+    try{
+        console.log('Making new search...');
+        await setTimeout(1000);
+        // Rewrite the departure only if changed
+        if (changedDeparture) {
+            await selectStation(page, '#fromLocation', currDeparture);
+        }
+        await selectStation(page, '#toLocation', currDestination);
+
+        // We only need to input the date one time
+        if (firstTimeDate) {
+            await selectDate(page, '#departureDate', departureDate);
+            firstTimeDate = false;
+        }
+
+        await clickSearchButton(page);
+        await waitForResults(page);
+        await scrollToLoadAllResults(page);
+        await setTimeout(3000);
+        await checkifSoldOut(page);
+
+        // Go back to search for new journey
+        await page.click('a[aria-label="Back to search journey"]');
     } catch (error) {
-        console.log('Error selecting passenger type:', error);
+        console.log('Error making new search:', error);
     }
 };
 
-const inputAge = async (page, passengerAge) => {
-    try {
-        await page.click('#passenger\\.age');
-        await page.type('#passenger\\.age', passengerAge); 
-    } catch (error) {
-        console.log('Error inputting age:', error);
-    }
-};
-
-const clickSaveButton = async (page) => {
-    try {
-        await page.click('button.MuiButtonBase-root.css-125mqfp[data-testid="savePassenger"]');
-    } catch (error) {
-        console.log('Error clicking save button:', error);
-    }
-};
-
+// Click the search button
 const clickSearchButton = async (page) => {
     try {
-        await page.click('button.MuiButtonBase-root.css-125mqfp');
+        const element = await select(page).getElement('button:contains(Search journey)');
+        await element.click();
     } catch (error) {
         console.log('Error clicking search button:', error);
     }
 };
 
+// Wait for the trip results to load
 const waitForResults = async (page) => {
-    // Wait for results to load (with a longer timeout to handle slow loads)
     try {
-        await page.waitForSelector('.MuiCard-root.Card-inactive', { visible: true, timeout: 60000});
+        await page.waitForSelector('.MuiCard-root.Card-inactive', { visible: true, timeout: 20000});
     } catch (error) {
         console.log('Selector error:', error);
         await browser.close();
@@ -167,13 +173,14 @@ const waitForResults = async (page) => {
     }
 };
 
+// Scroll to load all results
 const scrollToLoadAllResults = async (page) => {
     try {
         let previousHeight;
         while (true) {
             previousHeight = await page.evaluate('document.body.scrollHeight');
             await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
-            await setTimeout(2000); 
+            await setTimeout(500); 
             const newHeight = await page.evaluate('document.body.scrollHeight');
             if (newHeight === previousHeight) {
                 break;
@@ -184,65 +191,37 @@ const scrollToLoadAllResults = async (page) => {
     }
 };
 
-const scrapeScript = async (page, depTime, arrTime) => {
-    try {
-        const { trips, newScrape } = await page.evaluate((depTime, arrTime) => {
-            const tripElements = document.querySelectorAll('.MuiCard-root.Card-inactive');
-            const tripData = [];
-            let newScrape = false;
-            
-            tripElements.forEach(trip => {
-                const departureTimeElement = trip.querySelector('h3 span:nth-child(1)');
-                const arrivalTimeElement = trip.querySelector('h3 span:nth-child(2)');
-                const priceElement = trip.querySelector('.MuiTypography-body1');
-                const trainTypeElement = trip.querySelector('.MuiBox-root.css-13bjtlo img');
-                const costElement = trip.querySelector('.MuiBox-root.css-1mqr07s span.MuiTypography-root.MuiTypography-h2.css-8l6mxd');
-                const soldOutElement = trip.querySelector('h4.MuiTypography-root.MuiTypography-h4.css-rkvqhq');
+// Check if the trip is sold out
+const checkifSoldOut = async (page) => {
+    soldOut = false;
+    const depTime = currDepartureTime + "-";
+    console.log('Finding trip with departure time:', depTime + ' From: ' + currDeparture + ' To: ' + currDestination);
+    const tripElements = await page.$$('.MuiCard-root.Card-inactive');
 
-                const departureTime = departureTimeElement ? departureTimeElement.textContent : null;
-                const arrivalTime = arrivalTimeElement ? arrivalTimeElement.textContent : null;
-                const price = priceElement ? priceElement.textContent : null;
-                const trainType = trainTypeElement ? trainTypeElement.alt : null;
-                const cost = costElement ? costElement.textContent : null;
-                const soldOut = soldOutElement ? soldOutElement.textContent.includes('Sold out') : false;
+    for (const trip of tripElements) {
 
-                if (departureTime?.trim == depTime?.trim && arrivalTime == arrTime && soldOut == true) {
-                    newScrape = true;
-                }
+        // Find the departure time and make it clean
+        const times = await trip.$$('h3 span');
+        //await setTimeout(300);
+        const secondDepTime = await page.evaluate(el => el.textContent, times[0]);
+        const cleanedDepTime = secondDepTime.replace(/[\u2013\u2014]/g, '-').trim();
 
-                tripData.push({ departureTime, arrivalTime, cost, price, trainType, soldOut, newScrape });
-            });
-            
-            return { trips: tripData, newScrape };
-        }, depTime, arrTime);
-        
-        console.log('Trips:', trips, newScrape); 
-        return newScrape;
-    } catch (error) {
-        console.log('Error scraping trip data:', error);
+        // Is the departureTime found?
+        if (cleanedDepTime === depTime) {
+            const soldOutElement = await trip.$('.MuiBox-root.css-0 .MuiTypography-root.MuiTypography-h4.css-rkvqhq');
+            soldOut = soldOutElement ? await page.evaluate(el => el.textContent.includes('Sold out'), soldOutElement) : false;
+            return { soldOut, cleanedDepTime};
+        }
     }
+    console.log("Soldout: " + soldOut);
+    console.log(cleanedDepTime);
+    return null;
+
 };
 
-
-
-
-const departure = 'Stockholm Central';
-const destination = 'Hässleholm Central';
-const departureDate = '2024-12-04';
-const passengerType = 'STUDENT'; // ALL CAPS
-const passengerAge = '25';
-const departureTime = '16:15';
-const arrivalTime = '20:10';
-const runAgain = false;
-
-
-scrapeSJ(
+await scrapeSJ(
     departure,
     destination,
     departureDate,
-    passengerType,
-    passengerAge,
-    departureTime,
-    arrivalTime,
-    runAgain
+    departureTime
 );
