@@ -4,28 +4,24 @@ import select from "puppeteer-select";
 import scrapeStops from "./scrape_stops.js";
 import { selectStation, selectDate, handleUnexpectedPopups } from './utils.js';
 
-const departure = 'Stockholm Central';
-const destination = 'Hässleholm Central';
-const departureDate = '2024-12-20';
-const departureTime = '11:24';
 const url = 'https://www.sj.se/en/search-journey';
 
-let currDestination = destination;
-let currDeparture = departure;
-let currDepartureTime = departureTime;
+export const scrapeSJ = async (departure, destination, departureDate, departureTime) => {
 
-let soldOut = false;
-let changedDestination = false;
-let changedDeparture = true;
-let firstTimeDate = true;
+    let currDestination = destination;
+    let currDeparture = departure;
+    let currDepartureTime = departureTime;
 
-let routeData = [];
-let trips = [];
+    let soldOut = false;
+    let changedDestination = false;
+    let changedDeparture = true;
+    let firstTimeDate = true;
 
-const scrapeSJ = async () => {
-    
+    let routeData = [];
+    let trips = [];
+
     const browser = await puppeteer.launch({ 
-        headless: false,
+        headless: true,
         //slowMo: 100 // Add a delay of 100ms between each action 
     });
 
@@ -42,37 +38,39 @@ const scrapeSJ = async () => {
     handleUnexpectedPopups(page);
 
     // Make an initial search
-    await makeNewSearch(page);
-
+    soldOut = await makeNewSearch(page, currDeparture, currDestination, changedDeparture, departureDate, currDepartureTime, firstTimeDate, soldOut);
+    console.log('Sold out second time:', soldOut);
     // Are there stops for the initial trip?
     if (routeData.length === 0) {
-        if (soldOut) {
-            console.log('The trip has no substations and is fully booked');
-        } else {
-            console.log('The inputted trip does have available seats');
-        }
         await browser.close();
-        return;
+        if (soldOut) {
+            console.log('The trip is truly fully booked');
+            return {message: 'The trip is truly fully booked'};
+        } else {
+            console.log('The inputted trip already has available seats number 1');
+            return {message: 'The inputted trip already has available seats'};
+        }
     } else {
         if (!soldOut) {
-            console.log('The inputted trip does have available seats');
             await browser.close();
-            return;
+            console.log('The inputted trip already has available seats');
+            return {message: 'The inputted trip already has available seats'};
         } else {
-            await newProcessData(page, routeData);
+            await newProcessData(page, routeData, currDeparture, currDestination, currDepartureTime, soldOut, changedDestination, changedDeparture, trips);
         }
-    }
-
-    if (trips.length === 0) {
-        console.log('No trips available.');
-    } else {
-        console.log('Trips available:', trips);
     }
 
     await browser.close();
+    if (trips.length === 0) {
+        console.log('The trip is truly fully booked');
+        return {message: 'The trip is truly fully booked'};
+    } else {
+        console.log('Trips avalable');
+        return {message: 'Trips available:', trips};
+    }
 };
 
-const newProcessData = async (page, route) => {
+const newProcessData = async (page, route, currDeparture, currDestination, currDepartureTime, soldOut, changedDestination, changedDeparture, trips) => {
     try{
         if (route.length === 0) {
             return;
@@ -87,7 +85,7 @@ const newProcessData = async (page, route) => {
                 if (currDeparture === currDestination) {
                     return;
                 }
-                await makeNewSearch(page);
+                soldOut = await makeNewSearch(page, currDeparture, currDestination, changedDeparture, departureDate, firstTimeDate, currDepartureTime, soldOut);
                 if (soldOut) {
                     changedDestination = false;
                     changedDeparture = false;
@@ -111,7 +109,7 @@ const newProcessData = async (page, route) => {
                         // Slice the route array from the current index + 1
                         const remainingRoute = route.slice(currentIndex + 1);
                         console.log('Remaining route:', remainingRoute);
-                        await newProcessData(page, remainingRoute);
+                        await newProcessData(page, remainingRoute, currDeparture, currDestination, currDepartureTime, soldOut, changedDestination, changedDeparture, trips);
                     }
                     break;
                 }
@@ -123,7 +121,7 @@ const newProcessData = async (page, route) => {
 };
 
 // Make a new search with the new departure and destination
-const makeNewSearch = async (page) => {
+const makeNewSearch = async (page, currDeparture, currDestination, changedDeparture, departureDate, currDepartureTime, firstTimeDate, soldOut) => {
     try{
         console.log('Making new search...');
         await setTimeout(1000);
@@ -143,10 +141,11 @@ const makeNewSearch = async (page) => {
         await waitForResults(page);
         await scrollToLoadAllResults(page);
         await setTimeout(3000);
-        await checkifSoldOut(page);
+        soldOut = await checkifSoldOut(page, currDepartureTime, currDeparture, currDestination, soldOut);
 
         // Go back to search for new journey
         await page.click('a[aria-label="Back to search journey"]');
+        return soldOut;
     } catch (error) {
         console.log('Error making new search:', error);
     }
@@ -192,7 +191,7 @@ const scrollToLoadAllResults = async (page) => {
 };
 
 // Check if the trip is sold out
-const checkifSoldOut = async (page) => {
+const checkifSoldOut = async (page, currDepartureTime, currDeparture, currDestination, soldOut) => {
     soldOut = false;
     const depTime = currDepartureTime + "-";
     console.log('Finding trip with departure time:', depTime + ' From: ' + currDeparture + ' To: ' + currDestination);
@@ -202,26 +201,27 @@ const checkifSoldOut = async (page) => {
 
         // Find the departure time and make it clean
         const times = await trip.$$('h3 span');
-        //await setTimeout(300);
+        await setTimeout(300);
         const secondDepTime = await page.evaluate(el => el.textContent, times[0]);
         const cleanedDepTime = secondDepTime.replace(/[\u2013\u2014]/g, '-').trim();
 
         // Is the departureTime found?
         if (cleanedDepTime === depTime) {
+            console.log('Found trip with departure time:', cleanedDepTime);
             const soldOutElement = await trip.$('.MuiBox-root.css-0 .MuiTypography-root.MuiTypography-h4.css-rkvqhq');
             soldOut = soldOutElement ? await page.evaluate(el => el.textContent.includes('Sold out'), soldOutElement) : false;
-            return { soldOut, cleanedDepTime};
+            console.log('Sold out:', soldOut);
+            return soldOut;
         }
     }
-    console.log("Soldout: " + soldOut);
-    console.log(cleanedDepTime);
-    return null;
+    console.log("soldOut: ", soldOut);
+    return false;
 
 };
 
-await scrapeSJ(
-    departure,
-    destination,
-    departureDate,
-    departureTime
-);
+/*await scrapeSJ(
+    'Stockholm Central',
+    'Göteborg Central',
+    '2024-12-30',
+    '14:14'
+);*/
