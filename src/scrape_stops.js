@@ -1,19 +1,38 @@
+/**
+ * @file scrape_stops.js
+ * @description Script for scraping stops for the SJ Ticket Optimizer.
+ * @version 1.0.0
+ * @license MIT
+ * @author Erik Eichmüller
+ */
+
+
 import {setTimeout} from "node:timers/promises";
-import { selectStation, selectDate, handleLanguagePopup, handleCookieConsentPopup, handleUnexpectedPopups} from './utils.js';
+import { selectStation, selectDate, handleLanguagePopup, handleCookieConsentPopup, handleSurveyPopup} from './utils.js';
 
 const trafficInfoUrl = 'https://www.sj.se/en/traffic-information';
 
-const scrapeStops = async (browser, departure, destination, departureDate, departureTime) => {
+
+/**
+ * Scrapes the stops for a given trip from the SJ traffic information page.
+ * @param {Object} browser - The Puppeteer browser instance.
+ * @param {String} departure - The departure station.
+ * @param {String} destination - The destination station.
+ * @param {String} departureDate - The departure date in YYYY-MM-DD format.
+ * @param {String} departureTime - The departure time in HH:MM format.
+ * @returns {Promise<Array<String>>} - A promise that resolves to an array of stop names.
+ */
+export default async function scrapeStops(browser, departure, destination, departureDate, departureTime) {
 
   const page = await browser.newPage();
   await page.goto(trafficInfoUrl, { waitUntil: "networkidle2" });
 
-  // Only done one time
+  // Handle popups, only done one time
   await handleLanguagePopup(page);
   await handleCookieConsentPopup(page);
 
-  // Start a background task to handle unexpected pop-ups
-  handleUnexpectedPopups(page);
+  // Start a background task to handle survey pop-up which may appear at any time
+  handleSurveyPopup(page);
 
   console.log('Page loaded: Searching for route...'); 
 
@@ -35,7 +54,7 @@ const scrapeStops = async (browser, departure, destination, departureDate, depar
   await setTimeout(1000);
 
   // Extract the stop-stations excluding the departure and destination
-  const subStations = await extractStationList(page, actualDeparture, actualDestination);
+  const subStations = extractStationList(page, actualDeparture, actualDestination);
 
   await page.close();
 
@@ -46,18 +65,31 @@ const scrapeStops = async (browser, departure, destination, departureDate, depar
 }
 
 // Pick the route according to the departure time
+/**
+ * 
+ * @param {Object} page - The Puppeteer page object.
+ * @param {String} departureTime - The departure time to pick.
+ */
 const pickRoute = async (page, departureTime) => {
   try {
+    // Click the correct route according to the departure time
     return await page.evaluate((departureTime) => {
+
+      // Find the correct route according to the departure time
       const buttons = document.querySelectorAll('button[data-testid^="stationConnection_departure_"]');
+
       for (const button of buttons) {
+
+        // Get the screen reader text for the button
         const screenReaderText = button.querySelector('span[data-testid^="stationConnection_departure_"]').textContent;
+
+        // Check if the screen reader text includes the departure time
         if (screenReaderText.includes(`Departs ${departureTime}`)) {
           button.click();
-          return true;
+          return;
         }
       }
-      return false;
+      return;
     }, departureTime);
   } catch (error) {
     console.log('Error picking route:', error);
@@ -66,6 +98,13 @@ const pickRoute = async (page, departureTime) => {
 };
 
 // Extract the stop-stations excluding the departure and destination
+/**
+ * 
+ * @param {Object} page - The Puppeteer page object.
+ * @param {String} departure - The departure station.
+ * @param {String} destination - The destination station.
+ * @returns {Array<Object>} - An array of stop-stations.
+ */
 const extractStationList = async (page, departure, destination) => {
   try{
       const result = await page.evaluate((departure, destination) => {
@@ -82,10 +121,16 @@ const extractStationList = async (page, departure, destination) => {
                 .toLowerCase();
         };
 
+        // Extract the station names and departure times
         const stationButtons = document.querySelectorAll('button.MuiGrid-root.MuiGrid-container.MuiGrid-wrap-xs-nowrap.css-1ejmycs');
 
+        // Map the station buttons to an array of station objects, only add the departure time if it exists
         const stations = Array.from(stationButtons).map(button => {
+
+            // Get the station name and departure time
             const stationElement = button.querySelector('.MuiGrid-root.MuiGrid-item.MuiGrid-grid-xs-6.css-13ha1vu p.MuiTypography-root.MuiTypography-body1.css-19vpdtg');
+            
+            // Get the departure time from elements
             const timeElements = button.querySelectorAll('.MuiGrid-root.MuiGrid-item.MuiGrid-grid-xs-2.css-6xqzqi p.MuiTypography-root.MuiTypography-body1.css-eq4yst');
             const timeElement = timeElements.length > 1 ? timeElements[1] : timeElements[0];
 
@@ -95,10 +140,11 @@ const extractStationList = async (page, departure, destination) => {
             };
         });
 
+        // Find the index of the departure and destination stations in the stations array
         const departureIndex = stations.findIndex(station => station.name === cleanString(departure));
         const destinationIndex = stations.findIndex(station => station.name === cleanString(destination));
         
-        // Remove the first station (departure) and the last station (destination)
+        // Remove the first station (departure) and the last station (destination) from the stations array
         if (departureIndex !== -1 && destinationIndex !== -1 && departureIndex < destinationIndex) {
             return stations.slice(departureIndex + 1, destinationIndex);
         }
@@ -110,5 +156,3 @@ const extractStationList = async (page, departure, destination) => {
       return [];
   }
 };
-
-export default scrapeStops;

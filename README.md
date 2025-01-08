@@ -3,7 +3,7 @@ This project aims to help SJ and customers to SJ by optimizing available tickets
 
 ## Overview 
 
-The project scrapes ticket information from the SJ website to find solutions for booking trips that are stated as fully booked. It is only possible for trips that has no transfers. It uses Node.js and other libraries to automate the scraping process. 
+The project scrapes ticket information from the SJ website to find solutions for booking trips that are stated as fully booked. It is only possible for trips that has no transfers. It uses JavaScript and Node.js along with other libraries to automate the scraping process. 
 
 ## Libraries used
 
@@ -32,6 +32,15 @@ This script is responsible for scraping the stops for a given route. It:
 - Extracts the list of stops between the departure and destination.
 
 
+### `src/scraper_utils.js`
+
+Contains utility functions specific to the scraper, including:
+- `clickSearchButton`: Clicks the search button to search for a journey.
+- `waitForResults`: Waits for the trip results to load.
+- `scrollToLoadAllResults`: Scrolls to load all results on the page.
+- `checkifSoldOut`: Checks if a trip is sold out.
+
+
 ### `src/utils.js`
 
 Contains utility functions used across the project, including:
@@ -39,7 +48,14 @@ Contains utility functions used across the project, including:
 - `selectDate`: Selects a date from a date picker.
 - `handleLanguagePopup`: Handles the language selection pop-up.
 - `handleCookieConsentPopup`: Handles the cookie consent pop-up.
-- `handleUnexpectedPopups`: Handles any unexpected pop-ups during scraping.
+- `handleSurveyPopup`: Handles the survey pop-up.
+
+
+### `src/server.js`
+
+Sets up an Express server to run the SJ Ticket Optimizer script via an API endpoint. It:
+- Defines a POST endpoint to run the scraper script with provided parameters.
+- Returns the result of the script execution.
 
 ## How to Run
 
@@ -61,3 +77,7 @@ Contains utility functions used across the project, including:
     ```sh
     npm run start
     ```
+
+## License
+
+This project is licensed under the ISC License.
